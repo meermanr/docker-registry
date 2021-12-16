@@ -1,0 +1,18 @@
+---
+version: '2.3'
+
+volumes:
+  cache: {}
+
+services:
+  docker-registry-proxy:
+    # Cf. https://github.com/rpardini/docker-registry-proxy
+    image: rpardini/docker-registry-proxy:0.6.4
+    ports:
+      - 3128:3128
+    volumes:
+      - cache:/docker_mirror_cache
+      - ./ca:/ca
+    environment:
+      - REGISTRIES=k8s.gcr.io quat.io harbor.media.arm.com
+      - AUTH_REGISTRIES=auth.docker.io:meermanr:p3is9edocker
