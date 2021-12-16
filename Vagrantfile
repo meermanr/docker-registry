@@ -11,4 +11,12 @@ Vagrant.configure("2") do |config|
   config.vm.provision :docker_compose, 
     yml: "/vagrant/docker-compose.yml",
     run: "always"
+
+  config.vm.provision "Avahi",
+    type: "shell",
+    inline: <<-SHELL
+      set -e
+      apt-get update
+      apt-get install -y avahi-daemon
+    SHELL
 end
