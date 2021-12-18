@@ -9,6 +9,7 @@ Vagrant.configure("2") do |config|
 
   config.vm.provision :docker
   config.vm.provision :docker_compose, 
+    compose_version: "1.29.2",
     yml: "/vagrant/docker-compose.yml",
     run: "always"
 
