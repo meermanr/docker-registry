@@ -18,6 +18,7 @@ services:
       AUTH_REGISTRIES: auth.docker.io:meermanr:p3is9edocker
       ALLOW_PUSH: "true"
       PROXY_CONNECT_READ_TIMEOUT: '1d'   # Limits how long `docker push` can spend uploading, so make it big
+      PROXY_REQUEST_BUFFERING: "false"
     healthcheck:
       test:
         - CMD
