@@ -1,0 +1,131 @@
+---
+version: '2.3'
+
+volumes:
+  cache: {}
+
+services:
+  proxy:
+    # Cf. https://github.com/rpardini/docker-registry-proxy
+    image: rpardini/docker-registry-proxy:latest
+    ports:
+      - 3128:3128
+    volumes:
+      - cache:/docker_mirror_cache
+      - ./ca:/ca
+    env_file: .env # Should define $REGISTRIES and $AUTH_REGISTRIES
+    environment:
+      ALLOW_PUSH: "true"
+      # Try to avoid docker hub rate limits
+      ENABLE_MANIFEST_CACHE: "true"
+      MANIFEST_CACHE_PRIMARY_TIME: "1d"
+      MANIFEST_CACHE_SECONDARY_TIME: "60d"
+      # Buffer push data in the proxy? No: confuses client into thinking the
+      # remote server is not responding, when in reality the remote is still
+      # receiving our upload
+      #
+      # Likewise, set the read timeout big, so `docker push` can wait as long
+      # as needed for the upload to complete
+      PROXY_REQUEST_BUFFERING: "false"
+      PROXY_CONNECT_READ_TIMEOUT: '1d'
+      PROXY_CONNECT_SEND_TIMEOUT: "1d"
+    healthcheck:
+      test:
+        - CMD
+        - test
+        - -e
+        - /ca/ca.crt
+      interval: 5s
+      start_period: 30s
+
+  tls:
+    image: alpine
+    volumes:
+      - ./ca:/ca
+    depends_on:
+      proxy:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -c
+    command: 
+      # Poor person's HERE-DOCUMENT
+      #
+      # Note that for this 'command' to be passed to our entry point, we need to
+      # ensure it is an array of strings, rather than a single string. So we
+      # define an array ('-') and then defined a literal block ('|') with our
+      # multi-line string. 
+      #
+      # References:
+      #  - https://stackoverflow.com/a/53826340/83100
+      #  - https://adfinis.com/en/blog/openssl-x509-certificates/
+      - |
+        set -e
+        set -x
+        if test -e /ca/tls.crt && test -e /ca/tls.key; then
+          echo "Early out: /ca/tls.{crt,key} already exist, nothing to do!"
+          exit 0
+        fi
+        apk add socat openssl
+        cd /
+
+        # Create a new private key, and a (public) Certificate Signing Request (CSR)
+        openssl req \
+          -new \
+          -newkey rsa:4096 \
+          -keyout tls.key \
+          -nodes \
+          -config <(cat /etc/ssl/openssl.cnf <(printf "[SAN]\nsubjectAltName=DNS:docker-registry.local")) \
+          -extensions v3_req \
+          -reqexts SAN \
+          -subj '/CN=docker-registry.local/emailAddress=robert.meerman@arm.com' \
+          -out tls.csr 
+          # -config /etc/ssl1.1/openssl.cnf \
+
+        # Sign the CSR and generate a certificate
+        openssl x509 \
+          -req \
+          -sha256 \
+          -CA /ca/ca.crt \
+          -CAkey /ca/ca.key \
+          -passin pass:foobar \
+          -days 3650 \
+          -in tls.csr \
+          -extfile <(cat /etc/ssl/openssl.cnf <(printf "[SAN]\nsubjectAltName=DNS:docker-registry.local")) \
+          -extensions SAN \
+          -out tls.crt
+          # -extfile /etc/ssl1.1/openssl.cnf \
+          # -extensions v3_req \
+
+        # Generate a combined Certificate, Certificate Authority (CA) chain, and Private Key file
+        cat tls.crt /ca/ca.crt tls.key > tls.pem
+        cp -v tls.crt tls.key /ca/
+
+        # Need enough time for a sucessful healthcheck to complete (or else the
+        # 'registry' service will never start)
+        exit 0
+
+        # # Listen for TLS traffic (i.e. HTTPS) and forward it to the plaintext HTTP registry
+        # # Note that 'verify=0' prevents socat from attempting to verify the
+        # # *client*. We don't expect our client to present a certificate to us,
+        # # since we're not using mutual Transport Layer Security (mTLS)
+        # socat -d -d \
+        #   OPENSSL-LISTEN:443,fork,reuseaddr,cert=/tls.pem,verify=0 \
+        #   TCP-CONNECT:registry:443
+
+  registry:
+    # Cf. https://docs.docker.com/registry/configuration/
+    image: registry:2.7.1
+    hostname: docker-registry.local
+    ports:
+      - 80:5000
+      - 443:443
+    volumes:
+      - ./ca:/ca:ro
+      - ./registry:/var/lib/registry
+    environment:
+      REGISTRY_HTTP_ADDR: 0.0.0.0:443
+      REGISTRY_HTTP_TLS_CERTIFICATE: /ca/tls.crt
+      REGISTRY_HTTP_TLS_KEY: /ca/tls.key
+
+# vim: set et sw=2 ts=2 sts ai:
